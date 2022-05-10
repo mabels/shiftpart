@@ -36,12 +36,14 @@ type status struct {
 	readCount  int64
 	readtime   time.Duration
 	readCalls  int64
+	readOfs    int64
 	readDone   bool
 	writeError error
 	writeCount int64
 	writetime  time.Duration
 	writeCalls int64
 	writeDone  bool
+	writeOfs   int64
 }
 
 func versionStr(args *ShiftPartArgs) string {
@@ -88,7 +90,7 @@ func fileWriter(spa *ShiftPartArgs, chbuf chan buffer, chstatus chan status) {
 			return
 		}
 		toOfs := buffer.fileOfs - (*spa.FromLocation - *spa.ToLocation)
-		log.Printf("write %d bytes at %d", buffer.len, toOfs)
+		// log.Printf("write %d bytes at %d", buffer.len, toOfs)
 		start := time.Now()
 		fd.Seek(toOfs, 0)
 		count, err := fd.Write(buffer.buffer)
@@ -98,7 +100,7 @@ func fileWriter(spa *ShiftPartArgs, chbuf chan buffer, chstatus chan status) {
 			chstatus <- status{readCount: int64(-1), writeError: err}
 			return
 		}
-		chstatus <- status{writeCount: int64(count), writetime: writetime}
+		chstatus <- status{writeCount: int64(count), writetime: writetime, writeOfs: toOfs}
 	}
 	chstatus <- status{writeCount: int64(-1)}
 }
@@ -133,10 +135,10 @@ func fileReader(spa *ShiftPartArgs, chbuf chan buffer, chstatus chan status) {
 			return
 		}
 		if count > 0 {
-			chstatus <- status{readCount: int64(count), readtime: readtime}
+			fileOfs += int64(count)
+			chstatus <- status{readCount: int64(count), readtime: readtime, readOfs: fileOfs}
 			ibuf.len = count
 			chbuf <- ibuf
-			fileOfs += int64(count)
 			continue
 		}
 	}
@@ -204,8 +206,8 @@ func main() {
 	args.ToLocation = flags.Int64("to", -1, "to location")
 	args.BufferSize = flags.Int64("buffer", *args.BufferSize, "buffer size")
 	args.QueueSize = flags.Int("qsize", *args.QueueSize, "queue size")
-	args.SearchMark = flags.Bool("qsize", false, "queue size")
-	args.SearchOffset = flags.Int64("searchOffset", 0, "queue size")
+	args.SearchMark = flags.Bool("searchMark", false, "search mark")
+	args.SearchOffset = flags.Int64("searchOffset", 0, "search Offset")
 
 	err := rootCmd.Execute()
 	if err != nil {
@@ -296,9 +298,11 @@ func statusLoop(chstatus chan status, statusDone chan bool) {
 		go func() {
 			log.Println("started status output")
 			for {
-				log.Printf("%v read: %d(%d-%vs) write: %d(%d-%vs)%v\n",
+				log.Printf("%v read: ofs:%d %d(%d-%vs) write: ofs:%d %d(%d-%vs)%v\n",
 					time.Now(),
+					total.readOfs,
 					total.readCount, total.readCalls, total.readtime.Seconds(),
+					total.writeOfs,
 					total.writeCount, total.writeCalls, total.writetime.Seconds(), total.readDone && total.writeDone)
 				if total.writeDone && total.readDone {
 					chlogDone <- true
@@ -312,11 +316,17 @@ func statusLoop(chstatus chan status, statusDone chan bool) {
 		for ch := range chstatus {
 			total.readCount += ch.readCount
 			total.readtime += ch.readtime
+			if ch.readOfs > 0 {
+				total.readOfs = ch.readOfs
+			}
 			if ch.readCount > 0 {
 				total.readCalls += 1
 			}
 			total.writeCount += ch.writeCount
 			total.writetime += ch.writetime
+			if ch.writeOfs > 0 {
+				total.writeOfs = ch.writeOfs
+			}
 			if ch.writeCount > 0 {
 				total.writeCalls += 1
 			}
