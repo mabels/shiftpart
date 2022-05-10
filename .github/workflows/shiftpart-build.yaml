@@ -27,6 +27,9 @@ jobs:
       - name: Test
         run: go test -v ./...
 
+      - name: cleanup
+        run: git clean -f
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v2
         if: startsWith(github.ref, 'refs/tags/v')
